@@ -15,7 +15,7 @@ except ImportError:
 app = Flask(__name__)
 
 # Configuración desde variables de entorno
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+DATABASE_URL = os.environ.get("postgresql://flask_db_f0of_user:0A6uRzT5eHl6v8rVfQoXmC1vW2YqN3zZ@dpg-cvb7e80gph6c738o25ag-a.oregon-postgres.render.com/flask_db_f0of", "")
 API_KEY = os.environ.get("API_KEY", "clave-practica-07")
 APP_ENV = os.environ.get("APP_ENV", "development")
 
