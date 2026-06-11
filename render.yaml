@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: api-practica07-sensores
+    runtime: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:app"
