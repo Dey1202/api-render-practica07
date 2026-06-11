@@ -14,14 +14,11 @@ except ImportError:
 
 app = Flask(__name__)
 
-# Configuracion desde variables de entorno
+# Configuración desde variables de entorno
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 API_KEY = os.environ.get("API_KEY", "clave-practica-07")
 APP_ENV = os.environ.get("APP_ENV", "development")
 
-# ============================================
-# Funciones de base de datos
-# ============================================
 def get_db():
     if not USAR_DB or not DATABASE_URL:
         return None
@@ -32,7 +29,6 @@ def init_db():
     if not conn:
         return
     cur = conn.cursor()
-    
     # Tabla de materias
     cur.execute("""
     CREATE TABLE IF NOT EXISTS materias (
@@ -50,7 +46,7 @@ def init_db():
     )
     """)
     
-    # Tabla de reportes (para el Cron Job)
+    # Tabla de reportes
     cur.execute("""
     CREATE TABLE IF NOT EXISTS reportes (
         id SERIAL PRIMARY KEY,
@@ -60,7 +56,7 @@ def init_db():
     )
     """)
     
-    # Insertar datos iniciales si la tabla esta vacia
+    # Insertar datos iniciales si la tabla está vacía
     cur.execute("SELECT COUNT(*) FROM materias")
     count = cur.fetchone()[0]
     if count == 0:
@@ -68,28 +64,18 @@ def init_db():
             ('INF-101', 'Fundamentos de Programacion', 1, 6, 'Obligatoria', 3, 3, 'Desarrollo de software'),
             ('INF-102', 'Matematicas Discretas', 1, 5, 'Obligatoria', 4, 1, 'Logica computacional'),
             ('INF-201', 'Estructura de Datos', 2, 6, 'Obligatoria', 3, 3, 'Desarrollo de software'),
-            ('INF-202', 'Arquitectura de Computadoras', 2, 5, 'Obligatoria', 4, 1, 'Hardware y redes'),
-            ('INF-301', 'Bases de Datos', 3, 6, 'Obligatoria', 3, 3, 'Gestion de datos'),
-            ('INF-302', 'Redes de Computadoras', 3, 5, 'Obligatoria', 3, 2, 'Hardware y redes'),
-            ('INF-401', 'Ingenieria de Software', 4, 6, 'Obligatoria', 3, 3, 'Desarrollo de software'),
-            ('INF-402', 'Sistemas Operativos', 4, 5, 'Obligatoria', 3, 2, 'Infraestructura'),
-            ('INF-501', 'Servicios en la Nube', 5, 5, 'Obligatoria', 2, 3, 'Infraestructura'),
-            ('INF-502', 'Administracion de Datos', 5, 5, 'Obligatoria', 3, 2, 'Gestion de datos'),
-            ('INF-601', 'Inteligencia Artificial', 6, 5, 'Obligatoria', 3, 2, 'IA y datos'),
-            ('INF-602', 'Seguridad Informatica', 6, 5, 'Obligatoria', 3, 2, 'Infraestructura'),
-            ('INF-701', 'Desarrollo de Apps Moviles', 7, 5, 'Optativa', 2, 3, 'Desarrollo de software'),
-            ('INF-702', 'Big Data y Analitica', 7, 5, 'Optativa', 3, 2, 'IA y datos')
+            ('INF-301', 'Bases de Datos', 3, 6, 'Obligatoria', 3, 3, 'Gestion de datos')
         ]
         for m in materias_iniciales:
             cur.execute("""
             INSERT INTO materias (clave, nombre, semestre, creditos, tipo, horas_teoria, horas_practica, competencia)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, m)
-        conn.commit()
+    conn.commit()
     cur.close()
     conn.close()
 
-# Middleware de autenticacion simple
+# Middleware de autenticación simple
 def requiere_api_key(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -102,7 +88,46 @@ def requiere_api_key(f):
         return f(*args, **kwargs)
     return decorated
 
-# Documentacion interactiva en la raiz
+# Función interna que simula la tarea del Cron Job
+def generar_reporte_interno():
+    if not DATABASE_URL:
+        return {"error": "DATABASE_URL no configurada"}
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        cur.execute("SELECT COUNT(*) as total FROM materias WHERE activa = true")
+        total = cur.fetchone()["total"]
+        
+        cur.execute("""
+        SELECT semestre, COUNT(*) as materias, SUM(creditos) as creditos 
+        FROM materias WHERE activa = true GROUP BY semestre ORDER BY semestre
+        """)
+        por_semestre = cur.fetchall()
+        
+        cur.execute("""
+        SELECT tipo, COUNT(*) as total FROM materias WHERE activa = true GROUP BY tipo
+        """)
+        por_tipo = cur.fetchall()
+        
+        reporte = {
+            "total_materias_activas": total,
+            "por_semestre": por_semestre,
+            "por_tipo": por_tipo,
+            "generado_por": "Trigger Gratuito Alternativo",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        cur.execute("""
+        INSERT INTO reportes (tipo, datos) VALUES (%s, %s)
+        """, ("estadisticas_automaticas", json.dumps(reporte, default=str)))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return reporte
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.route("/")
 def index():
     base_url = request.url_root.rstrip("/")
@@ -111,61 +136,34 @@ def index():
     <html lang="es">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>API Materias - Practica 07</title>
         <style>
-            * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-            body {{ font-family: 'Courier New', monospace; background: #0d1117; color: #c9d1d9; padding: 20px; }}
-            .container {{ max-width: 800px; margin: 0 auto; }}
-            h1 {{ color: #58a6ff; margin: 20px 0; }}
-            h2 {{ color: #7ee787; margin: 20px 0 10px; }}
-            .endpoint {{ background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 15px; margin: 10px 0; }}
-            .method {{ display: inline-block; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-size: 0.85em; margin-right: 8px; }}
-            .get {{ background: #1f6feb; color: white; }}
-            .post {{ background: #238636; color: white; }}
-            .put {{ background: #9e6a03; color: white; }}
-            .delete {{ background: #da3633; color: white; }}
-            code {{ background: #1f2937; padding: 2px 6px; border-radius: 3px; color: #f0883e; }}
-            pre {{ background: #1f2937; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }}
-            .info {{ background: #0d419d33; border-left: 3px solid #58a6ff; padding: 12px; margin: 15px 0; border-radius: 0 6px 6px 0; }}
-            #resultado {{ background: #1f2937; padding: 15px; border-radius: 6px; margin-top: 10px; min-height: 50px; white-space: pre-wrap; display: none; }}
-            button {{ background: #238636; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; margin: 3px; }}
-            button:hover {{ background: #2ea043; }}
+            body {{ font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 20px; }}
+            h1 {{ color: #58a6ff; }}
+            button {{ background: #238636; color: white; border: none; padding: 8px; cursor: pointer; border-radius: 4px; }}
+            pre {{ background: #1f2937; padding: 10px; border-radius: 4px; }}
         </style>
     </head>
     <body>
-        <div class="container">
-            <h1>API REST: Catalogo de Materias</h1>
-            <p>Practica 07 - PaaS Render | Servicios en la Nube | TecNM</p>
-            <div class="info">
-                <strong>Ambiente:</strong> {APP_ENV} | <strong>DB:</strong> {'Conectada' if (USAR_DB and DATABASE_URL) else 'No configurada'} | <strong>Base URL:</strong> <code>{base_url}</code>
-            </div>
-            <h2>Prueba rapida</h2>
-            <button onclick="probar('/api/materias')">GET /api/materias</button>
-            <button onclick="probar('/api/materias?semestre=5')">Semestre 5</button>
-            <button onclick="probar('/api/estadisticas')">Estadisticas</button>
-            <button onclick="probar('/api/status')">Status</button>
-            <div id="resultado"></div>
-        </div>
+        <h1>API REST: Catálogo de Materias (Capalibre)</h1>
+        <p>Ambiente: {APP_ENV} | DB: {'Conectada' if (USAR_DB and DATABASE_URL) else 'No configurada'}</p>
+        <h2>Pruebas Rápidas:</h2>
+        <button onclick="ejecutar('/api/materias')">Ver Materias</button>
+        <button onclick="ejecutar('/api/estadisticas')">Ver Estadísticas</button>
+        <button onclick="ejecutar('/api/reportes')">Ver Historial Reportes</button>
+        <button onclick="ejecutar('/api/ejecutar-cron')">⚡ Forzar Tarea Ejecución (Simular Cron)</button>
+        <pre id="resultado">Haz clic en un botón para cargar datos...</pre>
         <script>
-            async function probar(endpoint) {{
-                const div = document.getElementById('resultado');
-                div.style.display = 'block';
-                div.textContent = 'Cargando...';
-                try {{
-                    const res = await fetch(endpoint);
-                    const data = await res.json();
-                    div.textContent = JSON.stringify(data, null, 2);
-                }} catch(e) {{ div.textContent = 'Error: ' + e.message; }}
+            async function ejecutar(endpoint) {{
+                const res = await fetch(endpoint);
+                const data = await res.json();
+                document.getElementById('resultado').textContent = JSON.stringify(data, null, 2);
             }}
         </script>
     </body>
     </html>
     """
 
-# ============================================
-# API REST - Endpoints
-# ============================================
 @app.route("/api/materias", methods=["GET"])
 def listar_materias():
     conn = get_db()
@@ -174,21 +172,11 @@ def listar_materias():
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     
     semestre = request.args.get("semestre")
-    tipo = request.args.get("tipo")
-    competencia = request.args.get("competencia")
-    
     query = "SELECT * FROM materias WHERE activa = true"
     params = []
-    
     if semestre:
         query += " AND semestre = %s"
         params.append(int(semestre))
-    if tipo:
-        query += " AND LOWER(tipo) = LOWER(%s)"
-        params.append(tipo)
-    if competencia:
-        query += " AND LOWER(competencia) LIKE LOWER(%s)"
-        params.append(f"%{competencia}%")
         
     query += " ORDER BY semestre, clave"
     cur.execute(query, params)
@@ -200,28 +188,7 @@ def listar_materias():
         if m.get("fecha_registro"):
             m["fecha_registro"] = m["fecha_registro"].isoformat()
             
-    return jsonify({
-        "total": len(materias),
-        "filtros": {"semestre": semestre, "tipo": tipo, "competencia": competencia},
-        "materias": materias
-    })
-
-@app.route("/api/materias/<int:id>", methods=["GET"])
-def obtener_materia(id):
-    conn = get_db()
-    if not conn:
-        return jsonify({"error": "Base de datos no disponible"}), 503
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM materias WHERE id = %s", (id,))
-    materia = cur.fetchone()
-    cur.close()
-    conn.close()
-    
-    if not materia:
-        return jsonify({"error": f"Materia con id {id} no encontrada"}), 404
-    if materia.get("fecha_registro"):
-        materia["fecha_registro"] = materia["fecha_registro"].isoformat()
-    return jsonify(materia)
+    return jsonify({"total": len(materias), "materias": materias})
 
 @app.route("/api/materias", methods=["POST"])
 @requiere_api_key
@@ -230,25 +197,14 @@ def crear_materia():
     if not conn:
         return jsonify({"error": "Base de datos no disponible"}), 503
     data = request.get_json()
-    if not data:
-        return jsonify({"error": "Body JSON requerido"}), 400
-        
-    campos_requeridos = ["clave", "nombre", "semestre"]
-    for campo in campos_requeridos:
-        if campo not in data:
-            return jsonify({"error": f"Campo requerido: {campo}"}), 400
-            
+    
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         cur.execute("""
         INSERT INTO materias (clave, nombre, semestre, creditos, tipo, horas_teoria, horas_practica, competencia)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *
-        """, (
-            data["clave"], data["nombre"], data["semestre"],
-            data.get("creditos", 5), data.get("tipo", "Obligatoria"),
-            data.get("horas_teoria", 3), data.get("horas_practica", 2),
-            data.get("competencia", "")
-        ))
+        """, (data["clave"], data["nombre"], data["semestre"], data.get("creditos", 5), 
+              data.get("tipo", "Obligatoria"), data.get("horas_teoria", 3), data.get("horas_practica", 2), data.get("competencia", "")))
         nueva = cur.fetchone()
         conn.commit()
         if nueva.get("fecha_registro"):
@@ -256,63 +212,8 @@ def crear_materia():
         cur.close()
         conn.close()
         return jsonify({"mensaje": "Materia creada", "materia": nueva}), 201
-    except psycopg2.errors.UniqueViolation:
-        conn.rollback()
-        cur.close()
-        conn.close()
-        return jsonify({"error": f"La clave {data['clave']} ya existe"}), 409
-
-@app.route("/api/materias/<int:id>", methods=["PUT"])
-@requiere_api_key
-def actualizar_materia(id):
-    conn = get_db()
-    if not conn:
-        return jsonify({"error": "Base de datos no disponible"}), 503
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Body JSON requerido"}), 400
-        
-    campos_permitidos = ["nombre", "semestre", "creditos", "tipo", "horas_teoria", "horas_practica", "competencia"]
-    updates = []
-    values = []
-    for campo in campos_permitidos:
-        if campo in data:
-            updates.append(f"{campo} = %s")
-            values.append(data[campo])
-            
-    if not updates:
-        return jsonify({"error": "No se proporcionaron campos para actualizar"}), 400
-        
-    values.append(id)
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(f"UPDATE materias SET {', '.join(updates)} WHERE id = %s RETURNING *", values)
-    actualizada = cur.fetchone()
-    conn.commit()
-    cur.close()
-    conn.close()
-    
-    if not actualizada:
-        return jsonify({"error": f"Materia {id} no encontrada"}), 404
-    if actualizada.get("fecha_registro"):
-        actualizada["fecha_registro"] = actualizada["fecha_registro"].isoformat()
-    return jsonify({"mensaje": "Materia actualizada", "materia": actualizada})
-
-@app.route("/api/materias/<int:id>", methods=["DELETE"])
-@requiere_api_key
-def eliminar_materia(id):
-    conn = get_db()
-    if not conn:
-        return jsonify({"error": "Base de datos no disponible"}), 503
-    cur = conn.cursor()
-    cur.execute("UPDATE materias SET activa = false WHERE id = %s AND activa = true", (id,))
-    afectadas = cur.rowcount
-    conn.commit()
-    cur.close()
-    conn.close()
-    
-    if afectadas == 0:
-        return jsonify({"error": f"Materia {id} no encontrada o ya inactiva"}), 404
-    return jsonify({"mensaje": f"Materia {id} desactivada (soft delete)"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 @app.route("/api/estadisticas", methods=["GET"])
 def estadisticas():
@@ -320,28 +221,11 @@ def estadisticas():
     if not conn:
         return jsonify({"error": "Base de datos no disponible"}), 503
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    
-    cur.execute("SELECT semestre, COUNT(*) as total, SUM(creditos) as total_creditos FROM materias WHERE activa = true GROUP BY semestre ORDER BY semestre")
-    por_semestre = cur.fetchall()
-    
-    cur.execute("SELECT tipo, COUNT(*) as total FROM materias WHERE activa = true GROUP BY tipo")
-    por_tipo = cur.fetchall()
-    
-    cur.execute("SELECT competencia, COUNT(*) as total FROM materias WHERE activa = true AND competencia IS NOT NULL AND competencia != '' GROUP BY competencia ORDER BY total DESC")
-    por_competencia = cur.fetchall()
-    
-    cur.execute("SELECT COUNT(*) as total_materias, SUM(creditos) as total_creditos, ROUND(AVG(creditos), 1) as promedio_creditos FROM materias WHERE activa = true")
+    cur.execute("SELECT COUNT(*) as total_materias, SUM(creditos) as total_creditos FROM materias WHERE activa = true")
     totales = cur.fetchone()
-    
     cur.close()
     conn.close()
-    return jsonify({
-        "resumen": totales,
-        "por_semestre": por_semestre,
-        "por_tipo": por_tipo,
-        "por_competencia": por_competencia,
-        "generado": datetime.now().isoformat()
-    })
+    return jsonify({"resumen": totales, "generado": datetime.now().isoformat()})
 
 @app.route("/api/reportes", methods=["GET"])
 def listar_reportes():
@@ -353,26 +237,16 @@ def listar_reportes():
     reportes = cur.fetchall()
     cur.close()
     conn.close()
-    
     for r in reportes:
         if r.get("fecha"):
             r["fecha"] = r["fecha"].isoformat()
-    return jsonify({"total": len(reportes), "reportes": reportes})
+    return jsonify({"reportes": reportes})
 
-@app.route("/api/status")
-def status():
-    return jsonify({
-        "status": "ok",
-        "ambiente": APP_ENV,
-        "plataforma": "Render.com",
-        "modelo": "PaaS",
-        "servicios": {
-            "api": "activa",
-            "base_datos": "conectada" if (USAR_DB and DATABASE_URL) else "no configurada",
-            "cron_job": "configurado"
-        },
-        "timestamp": datetime.now().isoformat()
-    })
+# NUEVO ENDPOINT ENDPOINT DE REEMPLAZO AL CRON JOB DE PAGO
+@app.route("/api/ejecutar-cron", methods=["GET"])
+def ejecutar_cron_alternativo():
+    resultado = generar_reporte_interno()
+    return jsonify({"status": "Tarea completada", "resultado": resultado})
 
 with app.app_context():
     init_db()
