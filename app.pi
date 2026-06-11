@@ -1,116 +1,104 @@
 import os
 import psycopg2
-import psycopg2.extras
-from flask import Flask, request, redirect, url_for, render_template_string
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
-# Tu nueva URL de base de datos fija y directa
+# Tu nueva URL de base de datos fija de Ohio
 DATABASE_URL = "postgresql://flask_user:VX1dWJ4Om4rgDdRYCTIKNFSmkZzcL5fL@dpg-d8lfqha8qa3s73e66dhg-a.ohio-postgres.render.com/flask_db_36tl"
 
-def get_db():
-    try:
-        return psycopg2.connect(DATABASE_URL, connect_timeout=5)
-    except Exception as e:
-        print(f"Error crítico de conexión: {e}")
-        return None
+def get_db_connection():
+    """Establece la conexión con la base de datos PostgreSQL."""
+    return psycopg2.connect(DATABASE_URL)
 
 def init_db():
-    conn = get_db()
-    if conn:
+    """Crea la tabla de sensores automáticamente si no existe."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS lecturas_sensor (
+            id SERIAL PRIMARY KEY,
+            sensor_id VARCHAR(50) NOT NULL,
+            temperatura FLOAT NOT NULL,
+            humedad FLOAT NOT NULL,
+            fecha TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# Inicializar la base de datos al arrancar la app
+init_db()
+
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "🟢 API REST de Sensores Activa y Conectada",
+        "practica": "Práctica 07 - PaaS & CronJob"
+    }), 200
+
+# 1. POST: Recibir datos del sensor
+@app.route('/api/sensor', methods=['POST'])
+def agregar_lectura():
+    data = request.get_json()
+    if not data or 'sensor_id' not in data or 'temperatura' not in data or 'humedad' not in data:
+        return jsonify({"error": "Faltan datos obligatorios (sensor_id, temperatura, humedad)"}), 400
+    
+    try:
+        conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS comentarios (
-                id SERIAL PRIMARY KEY,
-                nombre VARCHAR(100) NOT NULL,
-                campus VARCHAR(100),
-                comentario TEXT NOT NULL,
-                fecha TIMESTAMP DEFAULT NOW()
-            )
-        """)
+        cur.execute(
+            "INSERT INTO lecturas_sensor (sensor_id, temperatura, humedad) VALUES (%s, %s, %s) RETURNING id;",
+            (data['sensor_id'], data['temperatura'], data['humedad'])
+        )
+        nuevo_id = cur.fetchone()[0]
         conn.commit()
         cur.close()
         conn.close()
+        return jsonify({"mensaje": "Lectura guardada exitosamente", "id": nuevo_id}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-TEMPLATE = """
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Práctica 06 - PaaS Render</title>
-    <style>
-        body { font-family: sans-serif; background: #24243e; color: #eee; padding: 40px; text-align: center; }
-        .card { background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; max-width: 500px; margin: 20px auto; }
-        input, textarea, select, button { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; border: none; }
-        button { background: #2cb67d; color: white; font-weight: bold; cursor: pointer; }
-        .comment { background: rgba(255,255,255,0.05); padding: 10px; margin: 10px 0; text-align: left; border-left: 4px solid #7f5af0; }
-    </style>
-</head>
-<body>
-    <h1>Servicios en la Nube - PaaS</h1>
-    <div class="card">
-        <h3>Estado de la conexión:</h3>
-        <p>{% if db_ok %}🟢 Base de datos: CONECTADA (PostgreSQL){% else %}🔴 Base de datos: NO DISPONIBLE{% endif %}</p>
-    </div>
+# 2. GET: Obtener todas las lecturas
+@app.route('/api/sensor', methods=['GET'])
+def obtener_lecturas():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, sensor_id, temperatura, humedad, fecha FROM lecturas_sensor ORDER BY fecha DESC;")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        lecturas = []
+        for r in rows:
+            lecturas.append({
+                "id": r[0],
+                "sensor_id": r[1],
+                "temperatura": r[2],
+                "humedad": r[3],
+                "fecha": r[4].isoformat()
+            })
+        return jsonify(lecturas), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    <div class="card">
-        <h2>Muro de Comentarios</h2>
-        <form method="POST">
-            <input name="nombre" placeholder="Tu nombre" required>
-            <select name="campus">
-                <option value="TecNM Tampico">TecNM Tampico</option>
-                <option value="TecNM Ciudad Madero">TecNM Ciudad Madero</option>
-                <option value="TecNM Altamira">TecNM Altamira</option>
-            </select>
-            <textarea name="comentario" placeholder="Escribe un comentario..." required></textarea>
-            <button type="submit">Publicar Comentario</button>
-        </form>
-    </div>
+# 3. CRON JOB: Ruta especial para eliminar datos antiguos (más de 30 días o todos para pruebas)
+@app.route('/cron/clean', methods=['GET'])
+def limpiar_datos():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # En producción borra datos viejos. Para la escuela, limpiaremos los registros para demostrar que funciona.
+        cur.execute("DELETE FROM lecturas_sensor WHERE fecha < NOW() - INTERVAL '30 days';")
+        filas_borradas = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "CronJob Ejecutado con éxito", "registros_antiguos_eliminados": filas_borradas}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    <div class="card">
-        <h3>Comentarios recientes</h3>
-        {% for c in comentarios %}
-        <div class="comment">
-            <strong>{{ c[1] }}</strong> ({{ c[2] }})
-            <p>{{ c[3] }}</p>
-        </div>
-        {% endfor %}
-    </div>
-</body>
-</html>
-"""
-
-@app.route("/", methods=["GET", "POST"])
-def index():
-    init_db()
-    conn = get_db()
-    db_ok = conn is not None
-    
-    if request.method == "POST" and db_ok:
-        nombre = request.form.get("nombre")
-        campus = request.form.get("campus")
-        comentario = request.form.get("comentario")
-        try:
-            cur = conn.cursor()
-            cur.execute("INSERT INTO comentarios (nombre, campus, comentario) VALUES (%s, %s, %s)", (nombre, campus, comentario))
-            conn.commit()
-            cur.close()
-        except Exception as e:
-            print(f"Error al insertar: {e}")
-        return redirect(url_for("index"))
-
-    comentarios = []
-    if db_ok:
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM comentarios ORDER BY id DESC LIMIT 10")
-            comentarios = cur.fetchall()
-            cur.close()
-            conn.close()
-        except Exception as e:
-            print(f"Error al consultar: {e}")
-
-    return render_template_string(TEMPLATE, comentarios=comentarios, db_ok=db_ok)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
