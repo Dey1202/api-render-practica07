@@ -1,172 +1,116 @@
 import os
-import json
-from flask import Flask, request, jsonify
-from datetime import datetime
-from functools import wraps
-
-# Intentar importar psycopg2
-try:
-    import psycopg2
-    import psycopg2.extras
-    USAR_DB = True
-except ImportError:
-    USAR_DB = False
+import psycopg2
+import psycopg2.extras
+from flask import Flask, request, redirect, url_for, render_template_string
 
 app = Flask(__name__)
 
-# Configuración desde variables de entorno
-DATABASE_URL = os.environ.get("postgresql://flask_db_f0of_user:0A6uRzT5eHl6v8rVfQoXmC1vW2YqN3zZ@dpg-cvb7e80gph6c738o25ag-a.oregon-postgres.render.com/flask_db_f0of", "")
-API_KEY = os.environ.get("API_KEY", "clave-practica-07")
-APP_ENV = os.environ.get("APP_ENV", "development")
+# Tu nueva URL de base de datos fija y directa
+DATABASE_URL = "postgresql://flask_user:VX1dWJ4Om4rgDdRYCTIKNFSmkZzcL5fL@dpg-d8lfqha8qa3s73e66dhg-a.ohio-postgres.render.com/flask_db_36tl"
 
 def get_db():
-    if not USAR_DB or not DATABASE_URL:
+    try:
+        return psycopg2.connect(DATABASE_URL, connect_timeout=5)
+    except Exception as e:
+        print(f"Error crítico de conexión: {e}")
         return None
-    return psycopg2.connect(DATABASE_URL)
 
 def init_db():
     conn = get_db()
-    if not conn:
-        return
-    cur = conn.cursor()
-    # Tabla de materias
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS materias (
-        id SERIAL PRIMARY KEY,
-        clave VARCHAR(15) NOT NULL UNIQUE,
-        nombre VARCHAR(150) NOT NULL,
-        semestre INTEGER NOT NULL CHECK (semestre BETWEEN 1 AND 9),
-        creditos INTEGER DEFAULT 5,
-        tipo VARCHAR(30) DEFAULT 'Obligatoria',
-        horas_teoria INTEGER DEFAULT 3,
-        horas_practica INTEGER DEFAULT 2,
-        competencia VARCHAR(200),
-        activa BOOLEAN DEFAULT true,
-        fecha_registro TIMESTAMP DEFAULT NOW()
-    )
-    """)
-    
-    # Tabla de reportes
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS reportes (
-        id SERIAL PRIMARY KEY,
-        tipo VARCHAR(50),
-        datos JSONB,
-        fecha TIMESTAMP DEFAULT NOW()
-    )
-    """)
-    
-    # Insertar datos iniciales si la tabla está vacía
-    cur.execute("SELECT COUNT(*) FROM materias")
-    count = cur.fetchone()[0]
-    if count == 0:
-        materias_iniciales = [
-            ('INF-101', 'Fundamentos de Programacion', 1, 6, 'Obligatoria', 3, 3, 'Desarrollo de software'),
-            ('INF-102', 'Matematicas Discretas', 1, 5, 'Obligatoria', 4, 1, 'Logica computacional'),
-            ('INF-201', 'Estructura de Datos', 2, 6, 'Obligatoria', 3, 3, 'Desarrollo de software'),
-            ('INF-301', 'Bases de Datos', 3, 6, 'Obligatoria', 3, 3, 'Gestion de datos')
-        ]
-        for m in materias_iniciales:
-            cur.execute("""
-            INSERT INTO materias (clave, nombre, semestre, creditos, tipo, horas_teoria, horas_practica, competencia)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, m)
-    conn.commit()
-    cur.close()
-    conn.close()
-
-# Middleware de autenticación simple
-def requiere_api_key(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        key = request.headers.get("X-API-Key", "")
-        if key != API_KEY:
-            return jsonify({
-                "error": "API Key invalida o no proporcionada",
-                "instruccion": "Incluye el header X-API-Key con tu clave"
-            }), 401
-        return f(*args, **kwargs)
-    return decorated
-
-# Función interna que simula la tarea del Cron Job
-def generar_reporte_interno():
-    if not DATABASE_URL:
-        return {"error": "DATABASE_URL no configurada"}
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        
-        cur.execute("SELECT COUNT(*) as total FROM materias WHERE activa = true")
-        total = cur.fetchone()["total"]
-        
+    if conn:
+        cur = conn.cursor()
         cur.execute("""
-        SELECT semestre, COUNT(*) as materias, SUM(creditos) as creditos 
-        FROM materias WHERE activa = true GROUP BY semestre ORDER BY semestre
+            CREATE TABLE IF NOT EXISTS comentarios (
+                id SERIAL PRIMARY KEY,
+                nombre VARCHAR(100) NOT NULL,
+                campus VARCHAR(100),
+                comentario TEXT NOT NULL,
+                fecha TIMESTAMP DEFAULT NOW()
+            )
         """)
-        por_semestre = cur.fetchall()
-        
-        cur.execute("""
-        SELECT tipo, COUNT(*) as total FROM materias WHERE activa = true GROUP BY tipo
-        """)
-        por_tipo = cur.fetchall()
-        
-        reporte = {
-            "total_materias_activas": total,
-            "por_semestre": por_semestre,
-            "por_tipo": por_tipo,
-            "generado_por": "Trigger Gratuito Alternativo",
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        cur.execute("""
-        INSERT INTO reportes (tipo, datos) VALUES (%s, %s)
-        """, ("estadisticas_automaticas", json.dumps(reporte, default=str)))
         conn.commit()
         cur.close()
         conn.close()
-        return reporte
-    except Exception as e:
-        return {"error": str(e)}
 
-@app.route("/")
+TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Práctica 06 - PaaS Render</title>
+    <style>
+        body { font-family: sans-serif; background: #24243e; color: #eee; padding: 40px; text-align: center; }
+        .card { background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; max-width: 500px; margin: 20px auto; }
+        input, textarea, select, button { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; border: none; }
+        button { background: #2cb67d; color: white; font-weight: bold; cursor: pointer; }
+        .comment { background: rgba(255,255,255,0.05); padding: 10px; margin: 10px 0; text-align: left; border-left: 4px solid #7f5af0; }
+    </style>
+</head>
+<body>
+    <h1>Servicios en la Nube - PaaS</h1>
+    <div class="card">
+        <h3>Estado de la conexión:</h3>
+        <p>{% if db_ok %}🟢 Base de datos: CONECTADA (PostgreSQL){% else %}🔴 Base de datos: NO DISPONIBLE{% endif %}</p>
+    </div>
+
+    <div class="card">
+        <h2>Muro de Comentarios</h2>
+        <form method="POST">
+            <input name="nombre" placeholder="Tu nombre" required>
+            <select name="campus">
+                <option value="TecNM Tampico">TecNM Tampico</option>
+                <option value="TecNM Ciudad Madero">TecNM Ciudad Madero</option>
+                <option value="TecNM Altamira">TecNM Altamira</option>
+            </select>
+            <textarea name="comentario" placeholder="Escribe un comentario..." required></textarea>
+            <button type="submit">Publicar Comentario</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h3>Comentarios recientes</h3>
+        {% for c in comentarios %}
+        <div class="comment">
+            <strong>{{ c[1] }}</strong> ({{ c[2] }})
+            <p>{{ c[3] }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html>
+"""
+
+@app.route("/", methods=["GET", "POST"])
 def index():
-    base_url = request.url_root.rstrip("/")
-    return f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <title>API Materias - Practica 07</title>
-        <style>
-            body {{ font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 20px; }}
-            h1 {{ color: #58a6ff; }}
-            button {{ background: #238636; color: white; border: none; padding: 8px; cursor: pointer; border-radius: 4px; }}
-            pre {{ background: #1f2937; padding: 10px; border-radius: 4px; }}
-        </style>
-    </head>
-    <body>
-        <h1>API REST: Catálogo de Materias (Capalibre)</h1>
-        <p>Ambiente: {APP_ENV} | DB: {'Conectada' if (USAR_DB and DATABASE_URL) else 'No configurada'}</p>
-        <h2>Pruebas Rápidas:</h2>
-        <button onclick="ejecutar('/api/materias')">Ver Materias</button>
-        <button onclick="ejecutar('/api/estadisticas')">Ver Estadísticas</button>
-        <button onclick="ejecutar('/api/reportes')">Ver Historial Reportes</button>
-        <button onclick="ejecutar('/api/ejecutar-cron')">⚡ Forzar Tarea Ejecución (Simular Cron)</button>
-        <pre id="resultado">Haz clic en un botón para cargar datos...</pre>
-        <script>
-            async function ejecutar(endpoint) {{
-                const res = await fetch(endpoint);
-                const data = await res.json();
-                document.getElementById('resultado').textContent = JSON.stringify(data, null, 2);
-            }}
-        </script>
-    </body>
-    </html>
-    """
-
-@app.route("/api/materias", methods=["GET"])
-def listar_materias():
+    init_db()
     conn = get_db()
-    if not conn:
-        return jsonify({"error": "Base de datos no disponible"}), 503
-    cur = conn.cursor(cursor
+    db_ok = conn is not None
+    
+    if request.method == "POST" and db_ok:
+        nombre = request.form.get("nombre")
+        campus = request.form.get("campus")
+        comentario = request.form.get("comentario")
+        try:
+            cur = conn.cursor()
+            cur.execute("INSERT INTO comentarios (nombre, campus, comentario) VALUES (%s, %s, %s)", (nombre, campus, comentario))
+            conn.commit()
+            cur.close()
+        except Exception as e:
+            print(f"Error al insertar: {e}")
+        return redirect(url_for("index"))
+
+    comentarios = []
+    if db_ok:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM comentarios ORDER BY id DESC LIMIT 10")
+            comentarios = cur.fetchall()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error al consultar: {e}")
+
+    return render_template_string(TEMPLATE, comentarios=comentarios, db_ok=db_ok)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
